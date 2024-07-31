@@ -8,8 +8,11 @@ import re
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.user_credential import UserCredential
 from office365.sharepoint.files.file import File
-
+from openpyxl.cell.cell import MergedCell
+from openpyxl.utils import range_boundaries
+from openpyxl.styles import Alignment
 from io import BytesIO
+from openpyxl.styles.borders import Border, Side
 
 #Need access to sharepoint and the correct document_library
 def sharepoint():
@@ -87,7 +90,7 @@ def get_column_index(column_name):
     else:
         raise ValueError(f"Column '{column_name}' not found in headers")
 
-column_names = ['PRGM', 'WRTS #', 'Truck ID', 'STATUS', 'BUILD SITE', 'Shake Down Duration (working days)', 'BUILD END/EES START      PLANNED', 'BUILD END/EES START        ACTUAL'] 
+column_names = ['PRGM', 'WRTS #', 'Batch/Build Phase','Truck ID', 'STATUS', 'BUILD SITE', 'Shake Down Duration (working days)', 'BUILD END/EES START      PLANNED', 'BUILD END/EES START        ACTUAL'] 
 
 '''
 PRGM : 0
@@ -130,114 +133,90 @@ def normalize_vehicle_id(vehicle_id):
         # If the input doesn't match the pattern, return it as is
         return vehicle_id    
 
-def add_projections(p, program_list, v_len, row_place, i):
-    #program_list is a list of tuples, must iterate accordingly
-    
-    #Create list of only vehicle info from program_list
-    if len(program_list) < 1: #No vehicles to add 
-        return
-    
-    vehicle_info = [normalize_vehicle_id(item[2]) for item in program_list if item[2] != None and item[2] != 'TBD']
-    
-    #Convert the DV notation
-    
+def add_projections(p, entire_prog_list, i):
 
-    handoff_predict = [item[6] for item in program_list] #This is type str list
-    projection_headers = [cell.value for cell in projection_sheet[2]] #Dates throughout the year
-    predict_date = format_dates(p, handoff_predict) #This is type datetime list
-    #print("Date predict: ", predict_date)
+    if len(entire_prog_list) < 1:
+        return i
     
-    
-    
-    
-    row_place -= 1
-    
-    #Logic for checking cols and rows 
-    formated_cols = [normalize_vehicle_id(item) if type(item) == str else 0 for item in col_2]
-    print("New formatted colums : ", formated_cols)
+    print(f"\n----- ADDING {p} -----\n")
+    handoff_idx = column_names.index('BUILD END/EES START      PLANNED')
+    vehicle_id_idx = column_names.index('Truck ID')
+    start_row = rows_to_clear[i]
+    end_row = rows_to_clear[i] + len(entire_prog_list) - 1
 
-    if len(vehicle_info) < 1:
-        return
-    print("Vehicle Info: ", vehicle_info)
-    #The outer for loop traverses the build ops vehicles
-    #This inner loop traverses through the projection excel sheet
-    reset_row_idx = row_place
-    for dv, v in enumerate(vehicle_info):
-        row_place = reset_row_idx #Once the vehicle is found, need to start over the local idx
-        while row_place < prog_start_row[i+1]: #While in program section
-            if dv >= len(vehicle_info): #Idx out of range check
-                return
-            if v == 0: #If vehicle is in 'TBD' status or otherwise from prev checks
+    v = 0
+
+    projection_sheet.merge_cells(start_row=start_row, start_column=1, end_row=end_row, end_column=1)
+    top_left_Cell = projection_sheet.cell(row=start_row, column=1)
+    top_left_Cell.value = p
+    top_left_Cell.alignment = Alignment(horizontal='center', vertical='center')
+    projection_sheet.cell(row=top_left_Cell.row, column=1).border = medium_border
+    for v, prog in enumerate(entire_prog_list):
+        handoff_predict = prog[handoff_idx]
+        vehicle_id = prog[vehicle_id_idx]
+
+        current_row = start_row + v
+
+        total_vehicle_lst = [cell for cell in projection_sheet['B'][current_row-1:rows_to_clear[-1]]]
+
+        
+        for cell in total_vehicle_lst: #Going through projection sheet cells
+            if vehicle_id == None: #Not sure why it would be None but add a check
+                continue
+            if cell.value == None and not isinstance(cell, MergedCell): #Should not be a MergedCell, this is col B
+                projection_sheet.cell(row=cell.row, column=2, value=vehicle_id)
+                cell.value = vehicle_id
+                print(f"Added { p} : {vehicle_id}")
+                add_to_sheet(cell.row, handoff_predict)
+                projection_sheet.cell(row=current_row, column=2).border = Border(right=Side(style='medium'))
                 break
-            if formated_cols[row_place] == 0: #If it is weird format (aka 0 - see normalize_vehicle_id()) then go to next row and vehicle
-                row_place += 1
-                
-            elif v in formated_cols[row_place]:
-                
-                dat = predict_date[dv] #Need current vehicle ID
-                add_to_sheet(row_place, dat, projection_headers)
-                print(f" {p} -> r : {v}", row_place+1)
-                
-                row_place += 1
-            else:
-                row_place += 1
-    return 
-def add_to_sheet(r, target_date, ph): #Given the day started, populate the correct spots on excel sheet
+            
+        i += 1
+    projection_sheet.cell(row=current_row, column=2).border = Border(bottom=Side(style='medium'), right=Side(style='medium'))
+    return i #Need to save the idx so next vehicles cascade
+
+def add_to_sheet(r, target_date): #Given the day started, populate the correct spots on excel sheet
    
+    ph = [cell.value for cell in projection_sheet[2]] #Dates throughout the year
     column_index = None
     for index, header in enumerate(ph):
-        #print("Header : ", header, "\n")
-        #print("target_date : ", target_date, "\n")
         if isinstance(header, datetime.datetime):
             start_of_week = header 
             end_of_week = header + datetime.timedelta(days = 6)
             if start_of_week <= target_date <= end_of_week:
-                column_index = index + 1
-                r += 1
-                projection_sheet.cell(row=r, column=column_index, value=1)
-                projection_sheet.cell(row=r, column=column_index+1, value=1)
+                if target_date.weekday() == 4: #If it is Friday, count the start as following week
+                    print("Updating Friday date")
+                    column_index = index + 2
+                    
+                    projection_sheet.cell(row=r, column=column_index, value=1)
+                    projection_sheet.cell(row=r, column=column_index+1, value=1)
+                    print(f"Added to row {r}")
+                else:
+                    column_index = index + 1
+                    
+                    projection_sheet.cell(row=r, column=column_index, value=1)
+                    projection_sheet.cell(row=r, column=column_index+1, value=1)
                 
-                print("Added to cells")
+                    print(f"Added to row {r}")
                 break
 
-    
-
-
-
-
-def iterate_program(prg, build_site):
-
-    
+def iterate_program(row):
+    #This function provides a 1D list of the program information from Build Ops if it is applicable to EES 
+    row_data = [cell.value for cell in bo_sheet[row]]
     program_list = []
-    print(f"Adding {prg} ...")
 
-    for row in bo_sheet.iter_rows(min_row=11, values_only=True):  # Start from the 11th row (skip header)
-        skip = True #Flag set to nullify Canceled and Complete statuses 
-        if skip:
-            selected_columns = list(row[idx] for idx in column_indices)
+    if int(row_data[bo_idx_dict['Shake Down Duration (working days)']]) > 0: #Ensure it is a shakedown (Avoids date problems)
+        if row_data[bo_idx_dict['BUILD SITE']] == build_site: #Build site either 'N' or 'A'
+            if row_data[bo_idx_dict['STATUS']] != 'Complete' and row_data[bo_idx_dict['STATUS']] != 'Canceled': #Not canceled or Complete
+                if isinstance(row_data[bo_idx_dict['BUILD END/EES START      PLANNED']], datetime.date): #Must be datetime
+                    #print("Made it to date")
+                    if isInPast(row_data[bo_idx_dict['BUILD END/EES START      PLANNED']]) == False: #Only July 2024 to Dec                   
+                        program_list = [row_data[bo_idx_dict[col_idx]] for col_idx in column_names]
+                        return program_list
+    else:
+        return None
             
-            if selected_columns[gifc('Shake Down Duration (working days)')] > 0: #Ensure it is a shakedown (Avoids date problems)
-
-                
-                if  isinstance(selected_columns[gifc('BUILD END/EES START      PLANNED')], datetime.date):
-                    #selected_columns[gifc('BUILD END/EES START      PLANNED')] = selected_columns[gifc('BUILD END/EES START      PLANNED')].strftime("%m/%d/%Y")
-                    if isInPast(selected_columns[gifc('BUILD END/EES START      PLANNED')]):
-                        skip = False
-                    else:
-                        selected_columns[gifc('BUILD END/EES START      PLANNED')] = selected_columns[gifc('BUILD END/EES START      PLANNED')].strftime("%m/%d/%Y")
-
-                if  isinstance(selected_columns[gifc('BUILD END/EES START        ACTUAL')], datetime.date):
-                    selected_columns[gifc('BUILD END/EES START        ACTUAL')] = selected_columns[gifc('BUILD END/EES START        ACTUAL')].strftime("%m/%d/%Y") 
-                if selected_columns[gifc('STATUS')] == 'Complete' or selected_columns[gifc('STATUS')] == 'Canceled':
-                    skip = False
-                if selected_columns[gifc('PRGM')] == prg and selected_columns[gifc('BUILD SITE')] == build_site and skip == True and (selected_columns[gifc('BUILD END/EES START      PLANNED')] or selected_columns[gifc('BUILD END/EES START        ACTUAL')]  != None): #Only current prg, ATC builds, 
-                    wrts_info = tuple(selected_columns)
-                    program_list.append(wrts_info)
-
-    print("Success")
-    #print("program list ", program_list)
-    return program_list
-
+                       
 def isInPast(t): #If date is before July 1, don't add 
     if t < datetime.datetime(2024, 7, 1, 0, 0) or t.year > 2024:
         return True
@@ -286,47 +265,129 @@ def read_target(): #This function will grow or shrink as new vehicles come in
     
     return list(ranges)
 
+def traverse_bo_sheet(): #Goes through whole BO sheet 
+    
+    cell_value = []
+    
+    for row in bo_sheet.iter_rows(min_row=10, max_row=bo_sheet.max_row, min_col=2, max_col=2):
+        cell_value = row[0].value
+        
+        if cell_value in seen_values: 
+            value_rows[cell_value].append(row[0].row)
+                
+        else:
+            seen_values.add(cell_value)
+            if row[0].value != None:
+                value_rows[cell_value] = [row[0].row]
+                
+    return cell_value
+
+def define_indices():
+    i = idx = 0
+    bo_idx_dict ={}
+    while idx < len(column_names):
+            while i < len(headers):
+                if headers[i] == column_names[idx]:
+                    bo_idx_dict[column_names[idx]] = i
+                    i = 0 #Reset after finding 
+                    break
+                    
+                else:
+                    i += 1
+            idx += 1 
+    return bo_idx_dict  
+
+def clear_projection_sheet(projection_sheet):
+    start_row = 3
+    for rows in projection_sheet.iter_rows(min_row=start_row):
+        if rows[3].value != None and "1 Truck" in rows[3].value:
+            end_row = rows[3].row
+            rows_to_clear = [i for i in range(start_row, end_row)]
+            break
+    
+    for row in rows_to_clear:
+        for cell in projection_sheet.iter_cols(min_row=row, max_row=rows_to_clear[-1], min_col=1, max_col=len(headers), values_only=False):
+            for c in cell:
+                clear_cell(c)
+    
+    print("CLEARED\nTHE\nPROJECTION\nSHEET\n")
+    return rows_to_clear
+def clear_cell(cell):
+    if isinstance(cell, MergedCell): #Merged cells behave differently, this takes into account
+        for merged_range in list(projection_sheet.merged_cells.ranges):
+            min_col, min_row, max_col, max_row = range_boundaries(str(merged_range))
+            if min_col == 1 and max_col == 1:
+                projection_sheet.unmerge_cells(str(merged_range))
+            ''' #This 'if' is to clear merged_ranges
+            if cell.coordinate in merged_range:
+                top_left_cell = merged_range.coord.split(":")[0]
+                projection_sheet[top_left_cell].value = None
+            '''
+    else:
+        cell.value = None
+
+def main(): #This function is made to make NPG and ATC easier to populate both 
+    
+    idx = i = 0
+    for prog in value_rows:
+        entire_prog_list = []
+        for row in value_rows[prog]:
+            program_list = iterate_program(row) #Row of vehicle and program must be passed
+            
+            #Now program_list must be added to the projection worksheet, program order must be kept in mind. 
+            #It should be split up by program (AKA the outer loop)
+            
+            if program_list != None:
+                entire_prog_list.append(program_list)
+
+        i = add_projections(prog, entire_prog_list, idx) 
+        idx = i
+
+    projection_workbook.save(target_file)
+    return
+
 if __name__ == '__main__':
 
+    medium_border = Border(left=Side(style='medium'),
+                           right=Side(style='medium'),
+                           top=Side(style='medium'),
+                           bottom=Side(style='medium'))
+    seen_values = set() #This set may need to be globalized
+    value_rows = {}
+    all_progs = traverse_bo_sheet() #This will be added or shrunk depending on workload
     
+    bo_idx_dict = define_indices()
     projection_workbook = load_workbook(filename=target_file)
+    
     if len(sys.argv) > 1:
         if sys.argv[1] == 'N':
             build_site = sys.argv[1]
             projection_sheet = projection_workbook['2024 NPG Bay Space(Shakedown)']
+            rows_to_clear = clear_projection_sheet(projection_sheet)
+            main()
+            print(" ***** COMPLETED NPG *****")
+            projection_sheet = projection_workbook['2024 ATC Bay Space(Shakedown)']
+            build_site = 'A'
+            rows_to_clear = clear_projection_sheet(projection_sheet)
+            main()
+            print(" ***** COMPLETED ATC *****")
         elif sys.argv[1] == 'A':
             build_site = sys.argv[1]
             projection_sheet = projection_workbook['2024 ATC Bay Space(Shakedown)']
+            rows_to_clear = clear_projection_sheet(projection_sheet)
+            main()
+            print(" ***** COMPLETED ATC *****")
     else: #default to ATC if no arguments given
         build_site = 'A'
         projection_sheet = projection_workbook['2024 ATC Bay Space(Shakedown)']
-      
+        rows_to_clear = clear_projection_sheet(projection_sheet)
+        main()
+    
+    
     #Projections - read and write data
     
-    projection_sheet = projection_workbook['2024 ATC Bay Space(Shakedown)']
     
-    all_progs = []
-    vehicle_len=[18,8,25,2,18,34,14,3]
-    prog_start_row = [3, 21, 29, 54, 56, 74, 108, 122, 124]
-    '''
-    e82_length = 18
-    h06_length = 8
-    h08_length = 25
-    j01_length = 2
-    j07_length = 17
-    j08_length = 34
-    j09_length = 14
-    s26_length = 3
-    '''
-    ranges = read_target()
-   
-    col_2 = [0 if x == None or x =='TBD' else x for x in ranges]
+    
         
-    for i, p in enumerate(all_progs):
-        program_list = iterate_program(p, build_site) #Create new sheet for different build sites
-        add_projections(p, program_list, vehicle_len[i], prog_start_row[i], i)
-        
-
-    projection_workbook.save(target_file)    
 
     
