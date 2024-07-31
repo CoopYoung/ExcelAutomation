@@ -91,17 +91,6 @@ def get_column_index(column_name):
         raise ValueError(f"Column '{column_name}' not found in headers")
 
 column_names = ['PRGM', 'WRTS #', 'Batch/Build Phase','Truck ID', 'STATUS', 'BUILD SITE', 'Shake Down Duration (working days)', 'BUILD END/EES START      PLANNED', 'BUILD END/EES START        ACTUAL'] 
-
-'''
-PRGM : 0
-WRTS #: 1
-Truck ID: 2
-STATUS: 3
-BUILD_SITE: 4
-Shake down duration: 5
-ees start planned: 6
-actual: 7
-'''
 column_indices = [get_column_index(name) for name in column_names]
 
 def gifc(column): #get index from column
@@ -113,25 +102,6 @@ def gifc(column): #get index from column
         i += 1
     return i
 
-
-
-def normalize_vehicle_id(vehicle_id):
-    # Use regex to separate the alphabetic part from the numeric part
-    if 'LG1' in vehicle_id:
-        return vehicle_id.replace("LG1", "")   # Take care of all weird formats 
-    if 'TBD' in vehicle_id:
-        return 0
-    if 'CV' not in vehicle_id and 'DV' not in vehicle_id and 'CERT' not in vehicle_id: 
-        return 0
-    match = re.match(r"([A-Za-z]+)(\d+)", vehicle_id)
-    if match:
-        # Extract alphabetic and numeric parts
-        alphabetic_part = match.group(1)
-        numeric_part = match.group(2).lstrip('0')  # Remove leading zeros from the numeric part
-        return f"{alphabetic_part}{numeric_part}"
-    else:
-        # If the input doesn't match the pattern, return it as is
-        return vehicle_id    
 
 def add_projections(p, entire_prog_list, i):
 
@@ -246,24 +216,6 @@ def format_dates(prg, handoff_predict):
 
     return predict_date
 
-    ''' This will be for later, for now we will only do handoff_predict
-
-    
-    for i, t in enumerate(handoff_actual):
-        if t == None:
-            return i
-        else:
-            actual_date.append(datetime.datetime.strptime(t, format_data))
-    '''
-
-def read_target(): #This function will grow or shrink as new vehicles come in 
-
-    i = 0
-    for ranges in projection_sheet.iter_cols(min_row=1, max_row=124, min_col=1, max_col=2, values_only=True):
-        print("")
-        #normalize_vehicle_id(ranges[i])
-    
-    return list(ranges)
 
 def traverse_bo_sheet(): #Goes through whole BO sheet 
     
@@ -318,11 +270,6 @@ def clear_cell(cell):
             min_col, min_row, max_col, max_row = range_boundaries(str(merged_range))
             if min_col == 1 and max_col == 1:
                 projection_sheet.unmerge_cells(str(merged_range))
-            ''' #This 'if' is to clear merged_ranges
-            if cell.coordinate in merged_range:
-                top_left_cell = merged_range.coord.split(":")[0]
-                projection_sheet[top_left_cell].value = None
-            '''
     else:
         cell.value = None
 
@@ -360,7 +307,7 @@ if __name__ == '__main__':
     projection_workbook = load_workbook(filename=target_file)
     
     if len(sys.argv) > 1:
-        if sys.argv[1] == 'N':
+        if sys.argv[1] == 'N': #Choosing N will populate both NPG and ATC
             build_site = sys.argv[1]
             projection_sheet = projection_workbook['2024 NPG Bay Space(Shakedown)']
             rows_to_clear = clear_projection_sheet(projection_sheet)
@@ -383,8 +330,8 @@ if __name__ == '__main__':
         rows_to_clear = clear_projection_sheet(projection_sheet)
         main()
     
+    print(f"\n\nSuccess... Open {target_file} to view!\n\n")
     
-    #Projections - read and write data
     
     
     
